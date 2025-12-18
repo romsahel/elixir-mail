@@ -967,7 +967,7 @@ defmodule Mail.Parsers.RFC2822Test do
       """)
 
     assert message.parts == []
-    assert message.body == ""
+    assert message.body == nil
   end
 
   test "multipart content-type with no parts" do
@@ -1293,7 +1293,7 @@ defmodule Mail.Parsers.RFC2822Test do
   end
 
   defp parse_email(email, opts \\ []),
-    do: email |> convert_crlf |> Mail.Parsers.RFC2822.parse(opts)
+    do: email |> convert_crlf |> Mail.Parsers.RFC2822Stream.parse(opts)
 
   defp parse_recipient(recipient),
     do: Mail.Parsers.RFC2822.parse_recipient_value(recipient)
