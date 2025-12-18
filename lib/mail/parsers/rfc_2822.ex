@@ -466,7 +466,7 @@ defmodule Mail.Parsers.RFC2822 do
     end)
   end
 
-  defp parse_headers(message, headers, opts) do
+  def parse_headers(message, headers, opts) do
     headers =
       Enum.reduce(headers, message.headers, fn header, headers ->
         {key, value} = parse_header(header, opts)
@@ -508,7 +508,7 @@ defmodule Mail.Parsers.RFC2822 do
   defp put_header(headers, key, value),
     do: Map.put(headers, key, value)
 
-  defp mark_multipart(message),
+  def mark_multipart(message),
     do: Map.put(message, :multipart, multipart?(message.headers))
 
   defp parse_header_value(key, " " <> value),
@@ -1031,7 +1031,7 @@ defmodule Mail.Parsers.RFC2822 do
     end
   end
 
-  defp decode(body, message, opts) do
+  def decode(body, message, opts) do
     body = String.trim_trailing(body)
     content_type = message.headers["content-type"]
     charset = Mail.Proplist.get(content_type, "charset")
