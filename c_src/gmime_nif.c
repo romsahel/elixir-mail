@@ -7,6 +7,9 @@
 #include <erl_nif.h>
 #include <gmime/gmime.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include "gmime_parser.h"
 
 /*
  * Resource Types
@@ -28,57 +31,82 @@ static void gmime_message_destructor(ErlNifEnv *env, void *obj) {
     }
 }
 
-/*
- * Helper Functions
- */
-
-static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name) {
-    ERL_NIF_TERM atom;
-    if (enif_make_existing_atom(env, atom_name, &atom, ERL_NIF_LATIN1)) {
-        return atom;
-    }
-    return enif_make_atom(env, atom_name);
-}
-
-static ERL_NIF_TERM make_ok(ErlNifEnv *env) {
-    return make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM make_error(ErlNifEnv *env, const char *reason) {
-    return enif_make_tuple2(env,
-        make_atom(env, "error"),
-        make_atom(env, reason)
-    );
-}
 
 /*
- * NIF Functions (Stubs for Phase 1)
+ * NIF Functions
  */
 
-static ERL_NIF_TERM parse_string_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    // Stub implementation - will be completed in Phase 2
+static ERL_NIF_TERM parse_stream_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     if (argc != 2) {
         return enif_make_badarg(env);
     }
 
-    // Validate that first argument is a binary
+    // Extract file path from binary
+    ErlNifBinary path_binary;
+    if (!enif_inspect_binary(env, argv[0], &path_binary)) {
+        return make_error_tuple(env, "invalid_file_path");
+    }
+
+    // Null-terminate the path
+    char file_path[4096];
+    if (path_binary.size >= sizeof(file_path)) {
+        return make_error_tuple(env, "file_path_too_long");
+    }
+
+    memcpy(file_path, path_binary.data, path_binary.size);
+    file_path[path_binary.size] = '\0';
+
+    // Open file
+    int fd = open(file_path, O_RDONLY);
+    if (fd < 0) {
+        return make_error_tuple(env, "failed_to_open_file");
+    }
+
+    // Create GMime file stream
+    GMimeStream *stream = g_mime_stream_fs_new(fd);
+    if (stream == NULL) {
+        close(fd);
+        return make_error_tuple(env, "failed_to_create_stream");
+    }
+
+    // Parse from stream
+    ERL_NIF_TERM result = parse_from_stream(env, stream);
+
+    // Cleanup
+    g_object_unref(stream);
+    // Note: GMimeStreamFs takes ownership of fd and closes it
+
+    return result;
+}
+
+static ERL_NIF_TERM parse_string_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    if (argc != 2) {
+        return enif_make_badarg(env);
+    }
+
+    // Extract binary
     ErlNifBinary email_binary;
     if (!enif_inspect_binary(env, argv[0], &email_binary)) {
         return enif_make_badarg(env);
     }
 
-    // For now, just return :ok to test NIF loading
-    return make_ok(env);
-}
+    // Create GMime memory stream
+    GMimeStream *stream = g_mime_stream_mem_new_with_buffer(
+        (const char *)email_binary.data,
+        email_binary.size
+    );
 
-static ERL_NIF_TERM parse_stream_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    // Stub implementation - will be completed in Phase 3
-    if (argc != 2) {
-        return enif_make_badarg(env);
+    if (stream == NULL) {
+        return make_error_tuple(env, "failed_to_create_memory_stream");
     }
 
-    // For now, just return :ok to test NIF loading
-    return make_ok(env);
+    // Parse from stream
+    ERL_NIF_TERM result = parse_from_stream(env, stream);
+
+    // Cleanup
+    g_object_unref(stream);
+
+    return result;
 }
 
 /*

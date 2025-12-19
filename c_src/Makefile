@@ -40,7 +40,7 @@ endif
 LDFLAGS += $(GMIME_LIBS)
 
 # Source and output
-SRC = gmime_nif.c
+SRC = gmime_nif.c gmime_parser.c
 TARGET = ../priv/gmime_nif$(SO_EXT)
 
 # Build rules
