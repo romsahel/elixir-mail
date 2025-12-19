@@ -24,3 +24,9 @@ mail-*.tar
 
 # Temporary files for e.g. tests
 /tmp
+
+# NIF build artifacts
+/c_src/*.o
+/priv/*.so
+/priv/*.dylib
+.DS_Store

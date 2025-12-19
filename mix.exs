@@ -12,6 +12,10 @@ defmodule Mail.Mixfile do
       elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
+      compilers: [:elixir_make] ++ Mix.compilers(),
+      make_cwd: "c_src",
+      make_targets: ["all"],
+      make_clean: ["clean"],
       description: description(),
       package: package(),
       docs: docs(),
@@ -55,7 +59,9 @@ defmodule Mail.Mixfile do
 
   defp deps do
     [
-      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+      {:elixir_make, "~> 0.6", runtime: false},
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
+      {:benchee, "~> 1.0", only: :dev}
     ]
   end
 end
