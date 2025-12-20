@@ -81,6 +81,59 @@ static size_t trimmed_length(const char *str) {
 }
 
 /*
+ * Custom RFC 2047 decoder that handles bare "=?" sequences correctly
+ * GMime's decoder fails when it encounters a bare "=?" before a valid encoded word
+ * This function finds and decodes only valid encoded words
+ */
+static char* decode_rfc2047_robust(const char *text) {
+    if (text == NULL) return NULL;
+
+    size_t text_len = strlen(text);
+    GString *result = g_string_sized_new(text_len);
+    const char *p = text;
+
+    while (*p) {
+        // Look for potential encoded word start
+        if (p[0] == '=' && p[1] == '?') {
+            // Find the end of this potential encoded word
+            const char *end = strstr(p + 2, "?=");
+
+            if (end != NULL) {
+                // Extract the potential encoded word
+                size_t word_len = (end + 2) - p;
+                char *word = g_strndup(p, word_len);
+
+                // Try to decode it using GMime
+                char *decoded = g_mime_utils_header_decode_text(NULL, word);
+
+                // Check if it was actually decoded (GMime returns original if invalid)
+                if (decoded && strcmp(decoded, word) != 0) {
+                    // Successfully decoded - append the decoded text
+                    g_string_append(result, decoded);
+                    g_free(decoded);
+                    g_free(word);
+                    p = end + 2;  // Move past the encoded word
+                    continue;
+                } else {
+                    // Not a valid encoded word - treat "=?" as literal text
+                    g_free(decoded);
+                    g_free(word);
+                    g_string_append_c(result, *p);
+                    p++;
+                    continue;
+                }
+            }
+        }
+
+        // Regular character
+        g_string_append_c(result, *p);
+        p++;
+    }
+
+    return g_string_free(result, FALSE);
+}
+
+/*
  * Address Parsing
  */
 
@@ -475,12 +528,11 @@ static ERL_NIF_TERM convert_parts(ErlNifEnv *env, GMimeObject *object) {
  * These APIs correctly handle RFC 2047 decoding
  */
 static void override_message_headers(ErlNifEnv *env, GMimeMessage *message, ERL_NIF_TERM *headers) {
-    // Override "subject" header using g_mime_utils_header_decode_text()
-    // This is more robust than g_mime_message_get_subject() for edge cases
-    // like bare "=?" sequences in text
+    // Override "subject" header using our custom robust RFC 2047 decoder
+    // This handles edge cases like bare "=?" sequences that confuse GMime's decoder
     const char *raw_subject = g_mime_object_get_header(GMIME_OBJECT(message), "Subject");
     if (raw_subject) {
-        char *decoded_subject = g_mime_utils_header_decode_text(NULL, raw_subject);
+        char *decoded_subject = decode_rfc2047_robust(raw_subject);
         if (decoded_subject) {
             ERL_NIF_TERM key = make_binary(env, "subject");
             size_t trimmed_len = trimmed_length(decoded_subject);
