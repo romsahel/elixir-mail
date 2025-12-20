@@ -664,11 +664,15 @@ defmodule Mail.Parsers.RFC2822 do
 
   defp remove_excess_whitespace(<<>>), do: <<>>
 
-  defp remove_excess_whitespace(<<"  ", rest::binary>>),
-    do: remove_excess_whitespace(<<" ", rest::binary>>)
+  # Collapse any sequence of whitespace (space/tab) to a single space
+  # This handles: space+space, space+tab, tab+space, tab+tab
+  defp remove_excess_whitespace(<<c1, c2, rest::binary>>)
+       when c1 in [?\s, ?\t] and c2 in [?\s, ?\t],
+       do: remove_excess_whitespace(<<?\s, rest::binary>>)
 
-  defp remove_excess_whitespace(<<"\t", rest::binary>>),
-    do: remove_excess_whitespace(<<" ", rest::binary>>)
+  # Convert remaining single tabs to spaces
+  defp remove_excess_whitespace(<<?\t, rest::binary>>),
+    do: remove_excess_whitespace(<<?\s, rest::binary>>)
 
   defp remove_excess_whitespace(<<char::utf8, rest::binary>>),
     do: <<char::utf8, remove_excess_whitespace(rest)::binary>>

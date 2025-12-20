@@ -47,7 +47,10 @@ defmodule Mail.Parsers.GMime do
   """
   @spec parse_stream(Path.t(), keyword()) :: parse_result()
   def parse_stream(file_path, opts \\ []) when is_binary(file_path) do
-    NIF.parse_stream_nif(file_path, opts)
+    case NIF.parse_stream_nif(file_path, opts) do
+      {:ok, message} -> {:ok, post_process_message(message, opts)}
+      error -> error
+    end
   end
 
   @doc """
@@ -65,8 +68,158 @@ defmodule Mail.Parsers.GMime do
   """
   @spec parse_string(binary(), keyword()) :: parse_result()
   def parse_string(email_content, opts \\ []) when is_binary(email_content) do
-    NIF.parse_string_nif(email_content, opts)
+    case NIF.parse_string_nif(email_content, opts) do
+      {:ok, message} -> {:ok, post_process_message(message, opts)}
+      error -> error
+    end
   end
+
+  # Post-process the parsed message to match RFC2822 behavior exactly
+  defp post_process_message(%Mail.Message{} = message, opts) do
+    message
+    |> post_process_headers(opts)
+    |> post_process_body()
+    |> post_process_parts(opts)
+  end
+
+  # Process headers for RFC2822 compatibility
+  defp post_process_headers(%Mail.Message{headers: headers} = message, opts) do
+    headers =
+      headers
+      |> post_process_date_header(opts)
+      |> post_process_content_disposition_header(opts)
+      |> post_process_received_header(opts)
+      |> post_process_content_type_header(opts)
+
+    %{message | headers: headers}
+  end
+
+  # Parse content-disposition into structured format
+  defp post_process_to_header(headers, opts) do
+    case Map.get(headers, "to") do
+      nil ->
+        headers
+
+      value when is_binary(value) ->
+        # Reconstruct header line and parse with RFC2822
+        {_key, parsed_value} =
+          Mail.Parsers.RFC2822.parse_header("to: #{value}", opts)
+
+        Map.put(headers, "to", parsed_value)
+
+      _already_parsed ->
+        # Already in structured format
+        headers
+    end
+  end
+
+  # Parse date header into DateTime
+  defp post_process_date_header(headers, _opts) do
+    case Map.get(headers, "date") do
+      nil ->
+        headers
+
+      date_string when is_binary(date_string) ->
+        Map.put(headers, "date", Mail.Parsers.RFC2822.to_datetime(date_string))
+
+      %DateTime{} = datetime ->
+        # Already parsed
+        Map.put(headers, "date", datetime)
+    end
+  end
+
+  # Parse content-disposition into structured format
+  defp post_process_content_disposition_header(headers, opts) do
+    case Map.get(headers, "content-disposition") do
+      nil ->
+        headers
+
+      value when is_binary(value) ->
+        # Reconstruct header line and parse with RFC2822
+        {_key, parsed_value} =
+          Mail.Parsers.RFC2822.parse_header("content-disposition: #{value}", opts)
+
+        Map.put(headers, "content-disposition", parsed_value)
+
+      _already_parsed ->
+        # Already in structured format
+        headers
+    end
+  end
+
+  # Parse received header into structured format
+  defp post_process_received_header(headers, opts) do
+    case Map.get(headers, "received") do
+      nil ->
+        headers
+
+      values when is_list(values) ->
+        # Process each received header
+        parsed_values =
+          Enum.map(values, fn
+            value when is_binary(value) ->
+              {_key, parsed_value} = Mail.Parsers.RFC2822.parse_header("received: #{value}", opts)
+              parsed_value
+
+            already_parsed ->
+              already_parsed
+          end)
+
+        Map.put(headers, "received", parsed_values)
+
+      value when is_binary(value) ->
+        # Single received header
+        {_key, parsed_value} = Mail.Parsers.RFC2822.parse_header("received: #{value}", opts)
+        Map.put(headers, "received", [parsed_value])
+
+      _already_parsed ->
+        headers
+    end
+  end
+
+  # Add default charset to content-type if missing
+  # RFC2822 only adds charset when there are NO parameters at all
+  defp post_process_content_type_header(headers, _opts) do
+    case Map.get(headers, "content-type") do
+      nil ->
+        headers
+
+      [content_type] when is_binary(content_type) ->
+        # Content-Type with no parameters - add default charset
+        Map.put(headers, "content-type", [content_type, {"charset", "us-ascii"}])
+
+      [_content_type | _params] ->
+        # Already has parameters, don't add charset
+        headers
+
+      _other ->
+        headers
+    end
+  end
+
+  # Process body: trim trailing newlines and convert empty to nil
+  defp post_process_body(%Mail.Message{body: body, multipart: false} = message)
+       when is_binary(body) do
+    processed_body =
+      body
+      |> String.trim_trailing()
+      |> case do
+        "" -> nil
+        trimmed -> trimmed
+      end
+
+    %{message | body: processed_body}
+  end
+
+  defp post_process_body(message), do: message
+
+  # Recursively process parts
+  defp post_process_parts(%Mail.Message{parts: parts} = message, opts) when is_list(parts) do
+    processed_parts = Enum.map(parts, &post_process_message(&1, opts))
+    %{message | parts: processed_parts}
+  end
+
+  defp post_process_parts(message, _opts), do: message
 
   @doc """
   Parse email content (binary or enumerable).

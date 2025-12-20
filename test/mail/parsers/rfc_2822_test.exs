@@ -1033,8 +1033,8 @@ defmodule Mail.Parsers.RFC2822Test do
       """)
 
     assert message.headers["from"] == {"Keith Moore", "moore@cs.utk.edu"}
-    assert message.headers["to"] == [{"Keld J\xF8rn Simonsen", "keld@dkuug.dk"}]
-    assert message.headers["cc"] == [{"Andr\xE9 Pirard", "PIRARD@vm1.ulg.ac.be"}]
+    assert message.headers["to"] == [{"Keld Jørn Simonsen", "keld@dkuug.dk"}]
+    assert message.headers["cc"] == [{"André Pirard", "PIRARD@vm1.ulg.ac.be"}]
     assert message.headers["subject"] == "If you can read this you understand the example."
 
     message =
@@ -1044,7 +1044,7 @@ defmodule Mail.Parsers.RFC2822Test do
       Subject: Time for ISO 10646?
       """)
 
-    assert message.headers["from"] == {"Olle J\xE4rnefors", "ojarnef@admin.kth.se"}
+    assert message.headers["from"] == {"Olle Järnefors", "ojarnef@admin.kth.se"}
     assert message.headers["to"] == ["ietf-822@dimacs.rutgers.edu", "ojarnef@admin.kth.se"]
     assert message.headers["subject"] == "Time for ISO 10646?"
 
@@ -1056,7 +1056,7 @@ defmodule Mail.Parsers.RFC2822Test do
       Subject: Re: RFC-HDR care and feeding
       """)
 
-    assert message.headers["from"] == {"Patrik F\xE4ltstr\xF6m", "paf@nada.kth.se"}
+    assert message.headers["from"] == {"Patrik Fältström", "paf@nada.kth.se"}
     assert message.headers["to"] == [{"Dave Crocker", "dcrocker@mordor.stanford.edu"}]
     assert message.headers["cc"] == ["ietf-822@dimacs.rutgers.edu", "paf@comsol.se"]
     assert message.headers["subject"] == "Re: RFC-HDR care and feeding"
@@ -1293,7 +1293,10 @@ defmodule Mail.Parsers.RFC2822Test do
   end
 
   defp parse_email(email, opts \\ []),
-    do: email |> convert_crlf |> Mail.Parsers.RFC2822Stream.parse(opts)
+    do: email |> convert_crlf |> Mail.Parsers.GMime.parse_string(opts) |> elem(1)
+
+  # defp parse_email(email, opts \\ []),
+  #   do: email |> convert_crlf |> Mail.Parsers.RFC2822Stream.parse(opts)
 
   defp parse_recipient(recipient),
     do: Mail.Parsers.RFC2822.parse_recipient_value(recipient)
