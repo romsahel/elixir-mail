@@ -559,7 +559,7 @@ defmodule Mail.Parsers.RFC2822Test do
 
       """)
 
-    assert message.body == ""
+    assert message.body == nil
   end
 
   test "address comment parsing" do
@@ -574,7 +574,7 @@ defmodule Mail.Parsers.RFC2822Test do
       """)
 
     assert message.headers["to"] == [{"Test User", "user@example.com"}]
-    assert message.headers["cc"] == ["other@example.com"]
+    assert message.headers["cc"] == [{"comment", "other@example.com"}]
     assert message.headers["from"] == "me@example.com"
   end
 
@@ -665,6 +665,141 @@ defmodule Mail.Parsers.RFC2822Test do
 
     assert message.headers["list-unsubscribe"] ==
              "https://some-domain.com/te/c/abcdef=?signature=abcdef"
+  end
+
+  describe "=? sequences" do
+    test "handles multiple bare =? sequences with valid encoded words" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: First =? then =?utf-8?B?8J+YgA==?= then another =? and =?utf-8?Q?world?=
+
+        Test body
+        """)
+
+      assert message.headers["subject"] == "First =? then 😀 then another =? and world"
+    end
+
+    test "preserves =? in URLs within structured headers" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Test
+        List-Unsubscribe: <https://example.com/unsub?token=abc=?def>
+
+        Test body
+        """)
+
+      # List-Unsubscribe is structured - should not be neutralized
+      assert message.headers["list-unsubscribe"] == "<https://example.com/unsub?token=abc=?def>"
+    end
+
+    test "decodes valid RFC 2047 in custom X- headers" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Test
+        X-Custom-Header: Bare =? followed by =?utf-8?B?dGVzdA==?=
+
+        Test body
+        """)
+
+      assert message.headers["x-custom-header"] == "Bare =? followed by test"
+    end
+
+    test "handles broken encoded words gracefully" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Invalid =?utf-8?X?broken?= and valid =?utf-8?B?dGVzdA==?=
+
+        Test body
+        """)
+
+      # Invalid encoding 'X' should be neutralized, valid 'B' should decode
+      assert message.headers["subject"] == "Invalid = ?utf-8?X?broken?= and valid test"
+    end
+
+    test "handles adjacent encoded words without intervening whitespace" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: =?utf-8?B?SGVsbG8=?==?utf-8?B?V29ybGQ=?=
+
+        Test body
+        """)
+
+      # GMime should merge adjacent encoded words per RFC 2047
+      assert message.headers["subject"] == "HelloWorld"
+    end
+
+    test "handles Comments as unstructured header" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Test
+        Comments: File =? with =?utf-8?B?8J+TgQ==?= icon
+
+        Test body
+        """)
+
+      assert message.headers["comments"] == "File =? with 📁 icon"
+    end
+
+    test "preserves =? in Content-Type parameters (structured)" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Test
+        Content-Type: text/plain; name="file=?test.txt"
+
+        Test body
+        """)
+
+      # Content-Type is structured - parameters should not be neutralized
+      # Content-Type is returned as a list: ["text/plain", {"name", "value"}, ...]
+      content_type = message.headers["content-type"]
+      assert is_list(content_type)
+
+      assert Enum.find(content_type, fn
+               {k, v} -> k == "name" && v == "file=?test.txt"
+               _ -> false
+             end)
+    end
+
+    test "reversal: bare =? is preserved after decode" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: Query string uses =? in URL
+
+        Test body
+        """)
+
+      # Bare "=?" should be neutralized to "= ?", then reversed back to "=?"
+      assert message.headers["subject"] == "Query string uses =? in URL"
+    end
+
+    test "reversal: multiple bare =? are all preserved" do
+      message =
+        parse_email("""
+        To: user@example.com
+        From: me@example.com
+        Subject: First =? middle =? last =?
+
+        Test body
+        """)
+
+      assert message.headers["subject"] == "First =? middle =? last =?"
+    end
   end
 
   test "parses structured header with extraneous semicolon" do
@@ -891,22 +1026,22 @@ defmodule Mail.Parsers.RFC2822Test do
     assert [part1, part2, part3, part4] = message.parts
 
     assert %{headers: %{"content-type" => ["text/plain" | _]}} = part1
-    assert part1.body == "fran\xE7aise pr\xE8s \xE0 th\xE9\xE2tre lumi\xE8re"
+    assert part1.body == "française près à théâtre lumière"
 
     assert %{
              headers: %{
-               "content-type" => ["application/octet-stream", {"name", "Imagin\xE9.pdf"}]
+               "content-type" => ["application/octet-stream", {"name", "Imaginé.pdf"}]
              }
            } = part2
 
-    assert %{headers: %{"content-type" => ["application/pdf", {"name", "Pre\xECsentation.pdf"}]}} =
+    assert %{headers: %{"content-type" => ["application/pdf", {"name", "Présentation.pdf"}]}} =
              part3
 
     assert %{
              headers: %{
                "content-type" => [
                  "application/octet-stream",
-                 {"name", "ID S\xE9 - Liste inscrits.xlsx"}
+                 {"name", "ID Sé - Liste inscrits.xlsx"}
                ]
              }
            } = part4

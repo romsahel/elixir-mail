@@ -81,56 +81,209 @@ static size_t trimmed_length(const char *str) {
 }
 
 /*
- * Custom RFC 2047 decoder that handles bare "=?" sequences correctly
- * GMime's decoder fails when it encounters a bare "=?" before a valid encoded word
- * This function finds and decodes only valid encoded words
+ * RFC 2047 Robust Decoding Helper Functions
  */
-static char* decode_rfc2047_robust(const char *text) {
+
+/*
+ * Determines if a header should receive RFC 2047 neutralization treatment
+ * Returns true for unstructured text headers only
+ */
+static int is_rfc2047_text_header(const char *name) {
+    if (name == NULL) return 0;
+
+    // Unstructured headers that need neutralization:
+    if (strcasecmp(name, "subject") == 0) return 1;
+    if (strcasecmp(name, "comments") == 0) return 1;
+    if (strcasecmp(name, "content-description") == 0) return 1;
+
+    // Custom X-* headers
+    if ((name[0] == 'x' || name[0] == 'X') && name[1] == '-') return 1;
+
+    return 0;
+}
+
+/*
+ * Fast lookahead validation of RFC 2047 encoded-word syntax
+ * Checks format: =?charset?encoding?encoded-text?=
+ * Does NOT decode - only validates structure
+ *
+ * Returns: length of valid encoded word if found, 0 otherwise
+ */
+static size_t looks_like_valid_encoded_word(const char *text, size_t pos) {
+    const char *p = text + pos;
+
+    // Must start with "=?"
+    if (p[0] != '=' || p[1] != '?') return 0;
+    p += 2;
+
+    // 1. Charset token: one or more non-? non-whitespace chars
+    const char *charset_start = p;
+    while (*p && *p != '?' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+        p++;
+    }
+    if (p == charset_start || *p != '?') return 0; // Empty charset or no delimiter
+    p++; // Skip '?'
+
+    // 2. Encoding: must be 'B' or 'Q' (case-insensitive)
+    if (*p != 'B' && *p != 'b' && *p != 'Q' && *p != 'q') return 0;
+    p++;
+
+    // 3. Must have '?' after encoding
+    if (*p != '?') return 0;
+    p++;
+
+    // 4. Encoded-text: at least one char before "?="
+    const char *encoded_start = p;
+    const char *end = strstr(p, "?=");
+    if (end == NULL || end == encoded_start) return 0; // No closing or empty encoded-text
+
+    // Valid encoded word found
+    return (end + 2) - (text + pos); // Return total length including "=?" and "?="
+}
+
+/*
+ * Neutralizes invalid "=?" sequences using different strategies:
+ * - Bare =? (literal text) → ===BAREQ=== marker
+ * - Invalid encoded words → = ? (space added)
+ * This prevents GMime from choking on malformed input while preserving
+ * valid RFC 2047 encoded-words for proper decoding
+ *
+ * Single-pass algorithm with minimal allocations
+ * Returns: newly allocated string (caller must g_free)
+ */
+static char* neutralize_invalid_encoded_words(const char *text) {
+    if (text == NULL) return NULL;
+
+    size_t text_len = strlen(text);
+    // Allocate extra space for potential ===BAREQ=== markers
+    GString *result = g_string_sized_new(text_len + 64);
+
+    const char *p = text;
+    while (*p) {
+        // Look for potential encoded word start
+        if (p[0] == '=' && p[1] == '?') {
+            size_t word_len = looks_like_valid_encoded_word(text, p - text);
+
+            if (word_len > 0) {
+                // Valid encoded word - copy as-is
+                g_string_append_len(result, p, word_len);
+                p += word_len;
+            } else {
+                // Invalid - distinguish between bare =? and malformed encoded word
+                // Check if characters immediately after =? look like a charset (part of encoded word)
+                // Malformed: =?charset?... where charset has word characters
+                // Bare: =? followed by space, special chars, or nothing that looks like charset
+
+                const char *q = p + 2;
+                int looks_like_encoded_word = 0;
+                int charset_len = 0;
+
+                // Check if next chars look like a charset (alphanumeric, dash, underscore, dot)
+                while (*q && *q != ' ' && *q != '\t' && *q != '\r' && *q != '\n' && charset_len < 40) {
+                    if (*q == '?') {
+                        // Found delimiter - this looks like it's trying to be an encoded word
+                        looks_like_encoded_word = 1;
+                        break;
+                    } else if (isalnum((unsigned char)*q) || *q == '-' || *q == '_' || *q == '.') {
+                        // Valid charset character
+                        charset_len++;
+                        q++;
+                    } else {
+                        // Invalid character for charset - probably bare =?
+                        break;
+                    }
+                }
+
+                if (looks_like_encoded_word && charset_len > 0) {
+                    // Has format =?charset?... - looks like malformed encoded word
+                    g_string_append(result, "= ?");
+                    p += 2; // Skip the "=?"
+                } else {
+                    // Bare =? (literal text) - replace with marker
+                    g_string_append(result, "===BAREQ===");
+                    p += 2; // Skip the "=?"
+                }
+            }
+        } else {
+            // Regular character
+            g_string_append_c(result, *p);
+            p++;
+        }
+    }
+
+    return g_string_free(result, FALSE); // Return char*, free GString wrapper
+}
+
+/*
+ * Reverses neutralization by replacing ===BAREQ=== marker back to =?
+ * Leaves = ? sequences alone (they represent invalid encoded words)
+ *
+ * Strategy: Find and replace marker only
+ *
+ * Returns: newly allocated string (caller must g_free)
+ */
+static char* reverse_neutralization(const char *text) {
     if (text == NULL) return NULL;
 
     size_t text_len = strlen(text);
     GString *result = g_string_sized_new(text_len);
+
     const char *p = text;
-
     while (*p) {
-        // Look for potential encoded word start
-        if (p[0] == '=' && p[1] == '?') {
-            // Find the end of this potential encoded word
-            const char *end = strstr(p + 2, "?=");
-
-            if (end != NULL) {
-                // Extract the potential encoded word
-                size_t word_len = (end + 2) - p;
-                char *word = g_strndup(p, word_len);
-
-                // Try to decode it using GMime
-                char *decoded = g_mime_utils_header_decode_text(NULL, word);
-
-                // Check if it was actually decoded (GMime returns original if invalid)
-                if (decoded && strcmp(decoded, word) != 0) {
-                    // Successfully decoded - append the decoded text
-                    g_string_append(result, decoded);
-                    g_free(decoded);
-                    g_free(word);
-                    p = end + 2;  // Move past the encoded word
-                    continue;
-                } else {
-                    // Not a valid encoded word - treat "=?" as literal text
-                    g_free(decoded);
-                    g_free(word);
-                    g_string_append_c(result, *p);
-                    p++;
-                    continue;
-                }
-            }
+        // Look for ===BAREQ=== marker
+        if (strncmp(p, "===BAREQ===", 11) == 0) {
+            // Restore bare =?
+            g_string_append(result, "=?");
+            p += 11; // Skip marker
+        } else {
+            // Regular character (including = ? which we leave alone)
+            g_string_append_c(result, *p);
+            p++;
         }
-
-        // Regular character
-        g_string_append_c(result, *p);
-        p++;
     }
 
     return g_string_free(result, FALSE);
+}
+
+/*
+ * Robust RFC 2047 decoder that handles bare "=?" sequences and invalid encoded words
+ * Strategy: unfold → neutralize → GMime decode → restore markers
+ * - Bare =? becomes ===BAREQ=== → decoded by GMime (unchanged) → restored to =?
+ * - Invalid encoded words =?utf-8?X?...?= become = ?utf-8?X?...?= → unchanged → stays as = ?...
+ * - Valid encoded words =?utf-8?B?...?= → unchanged → decoded by GMime → final text
+ */
+static char* decode_rfc2047_robust(const char *text) {
+    if (text == NULL) return NULL;
+
+    // Step 0: Unfold header using GMime's built-in function
+    char *unfolded = g_mime_utils_header_unfold(text);
+    if (unfolded == NULL) return NULL;
+
+    // Skip leading whitespace
+    const char *trimmed = unfolded;
+    while (*trimmed && (*trimmed == ' ' || *trimmed == '\t')) {
+        trimmed++;
+    }
+
+    // Step 1: Neutralize invalid "=?" sequences
+    // Bare =? → ===BAREQ=== marker
+    // Invalid encoded words → = ? (space added)
+    char *neutralized = neutralize_invalid_encoded_words(trimmed);
+    g_free(unfolded);
+    if (neutralized == NULL) return NULL;
+
+    // Step 2: Let GMime decode the cleaned text
+    char *decoded = g_mime_utils_header_decode_text(NULL, neutralized);
+    g_free(neutralized);
+
+    if (decoded == NULL) return NULL;
+
+    // Step 3: Reverse neutralization by replacing ===BAREQ=== back to =?
+    // Leaves = ? sequences alone (they show invalid encoded words)
+    char *final = reverse_neutralization(decoded);
+    g_free(decoded);
+
+    return final;
 }
 
 /*
@@ -314,13 +467,35 @@ static ERL_NIF_TERM convert_headers(ErlNifEnv *env, GMimeMessage *message) {
         if (header == NULL) continue;
 
         const char *name = g_mime_header_get_name(header);
-        const char *value = g_mime_header_get_value(header);  // Use get_value instead of get_raw_value
+        if (name == NULL) continue;
 
-        if (name == NULL || value == NULL) continue;
-
-        // Convert header name to lowercase
+        // Convert header name to lowercase for header type detection
         char *key = to_lowercase(name);
         if (key == NULL) continue;
+
+        // Determine if this header needs robust RFC 2047 decoding
+        char *value = NULL;
+        if (is_rfc2047_text_header(key)) {
+            // Unstructured header: use robust decoder
+            const char *raw_value = g_mime_header_get_raw_value(header);
+            if (raw_value == NULL) {
+                free(key);
+                continue;
+            }
+            value = decode_rfc2047_robust(raw_value);
+            if (value == NULL) {
+                free(key);
+                continue;
+            }
+        } else {
+            // Structured or address header: use GMime's standard decoding
+            const char *decoded = g_mime_header_get_value(header);
+            if (decoded == NULL) {
+                free(key);
+                continue;
+            }
+            value = g_strdup(decoded); // Duplicate for consistent memory management
+        }
 
         // Create Elixir terms based on header type
         ERL_NIF_TERM erl_key = make_binary(env, key);
@@ -361,6 +536,7 @@ static ERL_NIF_TERM convert_headers(ErlNifEnv *env, GMimeMessage *message) {
         }
 
         // Cleanup
+        g_free(value); // Free allocated value (from decode_rfc2047_robust or g_strdup)
         free(key);
     }
 
@@ -412,8 +588,33 @@ static ERL_NIF_TERM extract_body(ErlNifEnv *env, GMimeObject *part) {
         return make_binary_len(env, "", 0);
     }
 
-    // Create Elixir binary
-    ERL_NIF_TERM result = make_binary_len(env, (const char *)byte_array->data, byte_array->len);
+    // Get charset from Content-Type and convert to UTF-8 if needed
+    GMimeContentType *content_type = g_mime_object_get_content_type(GMIME_OBJECT(mime_part));
+    const char *charset = content_type ? g_mime_content_type_get_parameter(content_type, "charset") : NULL;
+
+    ERL_NIF_TERM result;
+
+    if (charset && g_ascii_strcasecmp(charset, "utf-8") != 0 && g_ascii_strcasecmp(charset, "us-ascii") != 0) {
+        // Convert from specified charset to UTF-8
+        gsize bytes_read = 0, bytes_written = 0;
+        GError *error = NULL;
+
+        char *utf8_data = g_convert((const char *)byte_array->data, byte_array->len,
+                                   "UTF-8", charset,
+                                   &bytes_read, &bytes_written, &error);
+
+        if (utf8_data != NULL) {
+            result = make_binary_len(env, utf8_data, bytes_written);
+            g_free(utf8_data);
+        } else {
+            // Conversion failed, return original bytes
+            if (error) g_error_free(error);
+            result = make_binary_len(env, (const char *)byte_array->data, byte_array->len);
+        }
+    } else {
+        // Already UTF-8 or no charset specified, return as-is
+        result = make_binary_len(env, (const char *)byte_array->data, byte_array->len);
+    }
 
     g_object_unref(mem_stream);
 
@@ -673,6 +874,29 @@ ERL_NIF_TERM gmime_message_to_mail_message(ErlNifEnv *env, GMimeMessage *message
 
     // Convert parts if multipart
     ERL_NIF_TERM parts = is_multipart ? convert_parts(env, mime_part) : enif_make_list(env, 0);
+
+    // Special case: multipart with no parts (e.g., declares multipart content-type but no boundary markers in body)
+    // In this case, try to extract the preamble or epilogue as the body content
+    if (is_multipart) {
+        unsigned int part_count = 0;
+        enif_get_list_length(env, parts, &part_count);
+
+        if (part_count == 0) {
+            GMimeMultipart *mp = GMIME_MULTIPART(mime_part);
+
+            // Check preamble first (content before first boundary, or all content if no boundaries)
+            const char *preamble = g_mime_multipart_get_prologue(mp);
+            if (preamble && strlen(preamble) > 0) {
+                body = make_binary(env, preamble);
+            } else {
+                // If no preamble, check epilogue (content after last boundary)
+                const char *epilogue = g_mime_multipart_get_epilogue(mp);
+                if (epilogue && strlen(epilogue) > 0) {
+                    body = make_binary(env, epilogue);
+                }
+            }
+        }
+    }
 
     // Build Mail.Message struct map
     ERL_NIF_TERM struct_key = make_atom(env, "__struct__");

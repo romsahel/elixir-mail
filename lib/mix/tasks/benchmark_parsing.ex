@@ -34,46 +34,49 @@ defmodule Mix.Tasks.BenchmarkParsing do
     Mix.shell().info("Found #{length(eml_files)} .eml file(s) to process")
     Mix.shell().info("")
 
-    # Benchmark each parser
-    Enum.each(eml_files, fn path ->
-      Mix.shell().info("Processing: #{Path.basename(path)}")
+    # # Benchmark each parser
+    # Enum.each(eml_files, fn path ->
+    #   Mix.shell().info("Processing: #{Path.basename(path)}")
 
-      Benchee.run(
-        %{
-          "RFC2822 (original)" => fn ->
-            content = File.read!(path)
-            Mail.Parsers.RFC2822.parse(content)
-          end,
-          "RFC2822Stream (new)" => fn ->
-            Mail.Parsers.RFC2822Stream.parse(File.stream!(path),
-              parts_handler_fn: fn message, _opts -> {:skip, message} end
-            )
-          end
-        },
-        time: 10,
-        memory_time: 2
-      )
-    end)
+    #   Benchee.run(
+    #     %{
+    #       "RFC2822 (original)" => fn ->
+    #         content = File.read!(path)
+    #         Mail.Parsers.RFC2822.parse(content)
+    #       end,
+    #       "RFC2822Stream" => fn ->
+    #         Mail.Parsers.RFC2822Stream.parse(File.stream!(path),
+    #           parts_handler_fn: fn message, _opts -> {:skip, message} end
+    #         )
+    #       end,
+    #       "RFC2822GMime" => fn ->
+    #         {:ok, message} = Mail.Parsers.GMime.parse_stream(path)
+    #       end
+    #     },
+    #     time: 10,
+    #     memory_time: 2
+    #   )
+    # end)
 
-    Benchee.run(
-      %{
-        "RFC2822 (original)" => fn ->
-          Enum.each(eml_files, fn path ->
-            content = File.read!(path)
-            Mail.Parsers.RFC2822.parse(content)
-          end)
-        end,
-        "RFC2822Stream (new)" => fn ->
-          Enum.each(eml_files, fn path ->
-            Mail.Parsers.RFC2822Stream.parse(File.stream!(path),
-              parts_handler_fn: fn message, _opts -> {:skip, message} end
-            )
-          end)
-        end
-      },
-      time: 10,
-      memory_time: 2
-    )
+    # Benchee.run(
+    #   %{
+    #     "RFC2822 (original)" => fn ->
+    #       Enum.each(eml_files, fn path ->
+    #         content = File.read!(path)
+    #         Mail.Parsers.RFC2822.parse(content)
+    #       end)
+    #     end,
+    #     "RFC2822Stream (new)" => fn ->
+    #       Enum.each(eml_files, fn path ->
+    #         Mail.Parsers.RFC2822Stream.parse(File.stream!(path),
+    #           parts_handler_fn: fn message, _opts -> {:skip, message} end
+    #         )
+    #       end)
+    #     end
+    #   },
+    #   time: 10,
+    #   memory_time: 2
+    # )
   end
 
   defp find_eml_files do

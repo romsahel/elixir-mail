@@ -90,22 +90,31 @@ defmodule Mail.Parsers.GMime do
       |> post_process_content_disposition_header(opts)
       |> post_process_received_header(opts)
       |> post_process_content_type_header(opts)
+      |> post_process_address_headers(opts)
 
     %{message | headers: headers}
   end
 
-  # Parse content-disposition into structured format
-  defp post_process_to_header(headers, opts) do
-    case Map.get(headers, "to") do
+  # Parse address headers (from, to, cc, reply-to) into structured format
+  defp post_process_address_headers(headers, opts) do
+    address_headers = ["from", "to", "cc", "reply-to"]
+
+    Enum.reduce(address_headers, headers, fn header_name, acc_headers ->
+      post_process_address_header(acc_headers, header_name, opts)
+    end)
+  end
+
+  defp post_process_address_header(headers, header_name, opts) do
+    case Map.get(headers, header_name) do
       nil ->
         headers
 
       value when is_binary(value) ->
         # Reconstruct header line and parse with RFC2822
         {_key, parsed_value} =
-          Mail.Parsers.RFC2822.parse_header("to: #{value}", opts)
+          Mail.Parsers.RFC2822.parse_header("#{header_name}: #{value}", opts)
 
-        Map.put(headers, "to", parsed_value)
+        Map.put(headers, header_name, parsed_value)
 
       _already_parsed ->
         # Already in structured format
@@ -199,6 +208,21 @@ defmodule Mail.Parsers.GMime do
 
   # Process body: trim trailing newlines and convert empty to nil
   defp post_process_body(%Mail.Message{body: body, multipart: false} = message)
+       when is_binary(body) do
+    processed_body =
+      body
+      |> String.trim_trailing()
+      |> case do
+        "" -> nil
+        trimmed -> trimmed
+      end
+
+    %{message | body: processed_body}
+  end
+
+  # Special case: multipart with no parts (edge case where content-type says multipart but no actual parts)
+  # In this case, process the body like a regular message
+  defp post_process_body(%Mail.Message{body: body, multipart: true, parts: []} = message)
        when is_binary(body) do
     processed_body =
       body
