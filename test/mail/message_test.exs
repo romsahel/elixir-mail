@@ -262,13 +262,17 @@ defmodule Mail.MessageTest do
       |> Mail.put_attachment({file_name, "data"}, headers: [content_id: "attachment-id"])
       |> Mail.render()
 
-    encoded_header_value =
-      "=?UTF-8?Q?" <> Mail.Encoders.QuotedPrintable.encode("READMEüä.md") <> "?="
+    refute String.contains?(message, "=?UTF-8?Q?")
 
-    assert String.contains?(message, encoded_header_value)
+    assert String.contains?(message, "filename*=UTF-8''README%C3%BC%C3%A4.md")
 
     assert %Mail.Message{
-             headers: %{"content-disposition" => ["attachment", {"filename", ^file_name}]}
+             headers: %{
+               "content-disposition" => [
+                 "attachment",
+                 {"filename", "UTF-8''README%C3%BC%C3%A4.md"}
+               ]
+             }
            } = Mail.Parsers.RFC2822.parse(message)
   end
 

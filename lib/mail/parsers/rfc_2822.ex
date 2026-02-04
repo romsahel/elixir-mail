@@ -947,11 +947,11 @@ defmodule Mail.Parsers.RFC2822 do
     |> Enum.map(fn
       # Find parameters that are split into multiple parts
       {key, value} when is_binary(value) ->
-        case String.split(key, "*", parts: 2) do
+        case String.split(key, "*", parts: 2, trim: true) do
           [key, part] ->
             {{key, part}, value}
 
-          _ ->
+          [key] ->
             {key, value}
         end
 
