@@ -118,6 +118,15 @@ defmodule Mail.Renderers.RFC2822 do
     render_header_value(key, value)
   end
 
+  @rfc2231_headers ["Content-Disposition", "Content-Type"]
+  defp render_header_value(key, value) when key in @rfc2231_headers and is_binary(value) do
+    value
+  end
+
+  defp render_header_value(key, [value | subtypes]) when key in @rfc2231_headers do
+    Enum.join([value | render_subtypes(subtypes, :rfc_2231)], "; ")
+  end
+
   defp render_header_value(_key, [value | subtypes]),
     do:
       Enum.join([encode_header_value(value, :quoted_printable) | render_subtypes(subtypes)], "; ")
@@ -143,27 +152,46 @@ defmodule Mail.Renderers.RFC2822 do
 
   defp render_address(email), do: validate_address(email)
 
-  defp render_subtypes([]), do: []
+  defp render_subtypes(subtypes, encoding \\ :quoted_printable)
 
-  defp render_subtypes([{key, value} | subtypes]) when is_atom(key),
-    do: render_subtypes([{Atom.to_string(key), value} | subtypes])
+  defp render_subtypes([], _encoding), do: []
 
-  defp render_subtypes([{"boundary", value} | subtypes]) do
-    [~s(boundary="#{value}") | render_subtypes(subtypes)]
+  defp render_subtypes([{key, value} | subtypes], encoding) when is_atom(key),
+    do: render_subtypes([{Atom.to_string(key), value} | subtypes], encoding)
+
+  defp render_subtypes([{"boundary", value} | subtypes], encoding) do
+    [~s(boundary="#{value}") | render_subtypes(subtypes, encoding)]
   end
 
-  defp render_subtypes([{key, value} | subtypes]) do
+  # RFC 2231 parameter encoding for Content-Type and Content-Disposition
+  defp render_subtypes([{key, value} | subtypes], :rfc_2231) do
     key = String.replace(key, "_", "-")
-    value = encode_header_value(value, :quoted_printable)
 
-    value =
-      if value =~ ~r/[\s()<>@,;:\\<\/\[\]?=]/ do
-        "\"#{value}\""
-      else
-        value
-      end
+    if contains_non_ascii?(value) do
+      value = encode_header_value(value, :rfc_2231)
+      ["#{key}*=UTF-8''#{value}" | render_subtypes(subtypes, :rfc_2231)]
+    else
+      value = maybe_wrap_in_quotes(value)
+      ["#{key}=#{value}" | render_subtypes(subtypes, :rfc_2231)]
+    end
+  end
 
-    ["#{key}=#{value}" | render_subtypes(subtypes)]
+  defp render_subtypes([{key, value} | subtypes], :quoted_printable) do
+    key = String.replace(key, "_", "-")
+    value = value |> encode_header_value(:quoted_printable) |> maybe_wrap_in_quotes()
+    ["#{key}=#{value}" | render_subtypes(subtypes, :quoted_printable)]
+  end
+
+  defp contains_non_ascii?(value) do
+    String.match?(value, ~r/[\x80-\xFF]/)
+  end
+
+  defp maybe_wrap_in_quotes(value) do
+    if value =~ ~r/[\s()<>@,;:\\<\/\[\]?=]/ do
+      "\"#{value}\""
+    else
+      value
+    end
   end
 
   @doc """
@@ -196,6 +224,11 @@ defmodule Mail.Renderers.RFC2822 do
       ^header_value -> header_value
       encoded -> wrap_encoded_words(encoded)
     end
+  end
+
+  defp encode_header_value(header_value, :rfc_2231) do
+    # RFC 2231: parameter*=UTF-8''percent-encoded-value
+    URI.encode(header_value, &URI.char_unreserved?/1)
   end
 
   defp wrap_encoded_words(value) do

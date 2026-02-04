@@ -367,6 +367,51 @@ defmodule Mail.Renderers.RFC2822Test do
     end
   end
 
+  describe "RFC 2047 encoding restrictions" do
+    test "Subject header uses RFC 2047 encoding for non-ASCII characters" do
+      header = Mail.Renderers.RFC2822.render_header("subject", "café")
+      assert header == "Subject: =?UTF-8?Q?caf=C3=A9?="
+
+      header = Mail.Renderers.RFC2822.render_header("subject", "Test 日本語 Subject")
+      assert header =~ "Subject: =?UTF-8?Q?"
+      assert header =~ "?="
+    end
+
+    test "From header uses RFC 2047 encoding for non-ASCII names" do
+      header = Mail.Renderers.RFC2822.render_header("from", {"José García", "jose@example.com"})
+      assert header == ~s(From: =?UTF-8?Q?"Jos=C3=A9 Garc=C3=ADa"?= <jose@example.com>)
+
+      header = Mail.Renderers.RFC2822.render_header("from", {"山田太郎", "yamada@example.com"})
+      assert header =~ "From: =?UTF-8?Q?"
+      assert header =~ "?= <yamada@example.com>"
+    end
+
+    test "Content-Disposition non-ASCII filename parameter uses RFC 2231 encoding" do
+      # RFC 2047 explicitly forbids encoded-words in Content-Disposition parameters
+      header =
+        Mail.Renderers.RFC2822.render_header(
+          "Content-Disposition",
+          ["attachment", filename: "café.pdf"]
+        )
+
+      # Should NOT contain RFC 2047 encoded-word markers
+      # Should use RFC 2231 encoding for non-ASCII characters
+      assert header == "Content-Disposition: attachment; filename*=UTF-8''caf%C3%A9.pdf"
+    end
+
+    test "Content-Disposition ASCII filename parameter does NOT use RFC 2047 encoding" do
+      # RFC 2047 explicitly forbids encoded-words in Content-Disposition parameters
+      header =
+        Mail.Renderers.RFC2822.render_header(
+          "Content-Disposition",
+          ["attachment", filename: "name.pdf"]
+        )
+
+      # Should NOT contain RFC 2047 encoded-word markers
+      assert header == "Content-Disposition: attachment; filename=name.pdf"
+    end
+  end
+
   describe "multipart configuration" do
     test "multipart/alternative with text/plain and text/html" do
       message =
