@@ -213,4 +213,32 @@ defmodule Mail.Encoders.QuotedPrintableTest do
     assert Mail.Encoders.QuotedPrintable.decode("foo=XY") == "foo=XY"
     assert Mail.Encoders.QuotedPrintable.decode("foo=X") == "foo=X"
   end
+
+  test "decodes encoded whitespace" do
+    assert Mail.Encoders.QuotedPrintable.decode("hello=20world") == "hello world"
+    assert Mail.Encoders.QuotedPrintable.decode("col1=09col2") == "col1\tcol2"
+  end
+
+  test "decodes mixed-case hex sequences" do
+    assert Mail.Encoders.QuotedPrintable.decode("=aF") == <<0xAF>>
+    assert Mail.Encoders.QuotedPrintable.decode("=Fa") == <<0xFA>>
+  end
+
+  test "decodes soft line break at end of input" do
+    assert Mail.Encoders.QuotedPrintable.decode("foo=\r\n") == "foo"
+  end
+
+  test "decodes bare-LF soft line breaks (LF-only emails)" do
+    assert Mail.Encoders.QuotedPrintable.decode("Now's the time =\nfor all folk") ==
+             "Now's the time for all folk"
+
+    assert Mail.Encoders.QuotedPrintable.decode("foo=\n") == "foo"
+  end
+
+  test "decodes long ascii runs with multiple encoded sequences" do
+    chunk = String.duplicate("x", 100)
+    input = chunk <> "=3D" <> chunk <> "=3D" <> chunk
+    expected = chunk <> "=" <> chunk <> "=" <> chunk
+    assert Mail.Encoders.QuotedPrintable.decode(input) == expected
+  end
 end
