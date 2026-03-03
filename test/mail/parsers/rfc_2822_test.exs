@@ -1295,7 +1295,7 @@ defmodule Mail.Parsers.RFC2822Test do
   end
 
   defp parse_email(email, opts \\ []),
-    do: email |> convert_crlf |> Mail.Parsers.RFC2822.parse(opts)
+    do: email |> convert_crlf |> Mail.Parsers.RFC2822Binary.parse(opts)
 
   defp parse_recipient(recipient),
     do: Mail.Parsers.RFC2822.parse_recipient_value(recipient)
