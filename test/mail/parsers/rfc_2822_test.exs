@@ -493,6 +493,42 @@ defmodule Mail.Parsers.RFC2822Test do
            ]
   end
 
+  test "accumulates multiple 'Authentication-Results' headers into a list" do
+    message =
+      parse_email("""
+      Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=sender@example.com
+      Authentication-Results: relay.example.net; dkim=pass header.i=@example.com
+      To: user@example.com
+      From: sender@example.com
+      Subject: Test
+      Content-Type: text/plain
+
+      Test
+      """)
+
+    assert message.headers["authentication-results"] == [
+             "relay.example.net; dkim=pass header.i=@example.com",
+             "mx.example.com; spf=pass smtp.mailfrom=sender@example.com"
+           ]
+  end
+
+  test "wraps a single 'Authentication-Results' header in a list" do
+    message =
+      parse_email("""
+      Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=sender@example.com
+      To: user@example.com
+      From: sender@example.com
+      Subject: Test
+      Content-Type: text/plain
+
+      Test
+      """)
+
+    assert message.headers["authentication-results"] == [
+             "mx.example.com; spf=pass smtp.mailfrom=sender@example.com"
+           ]
+  end
+
   test "parses with a '=' in boundary" do
     message =
       parse_email("""

@@ -415,6 +415,9 @@ defmodule Mail.Parsers.RFC2822 do
   defp put_header(headers, "received" = key, value),
     do: Map.update(headers, key, [value], &[value | &1])
 
+  defp put_header(headers, "authentication-results" = key, value),
+    do: Map.update(headers, key, [value], &[value | &1])
+
   defp put_header(headers, key, value),
     do: Map.put(headers, key, value)
 
