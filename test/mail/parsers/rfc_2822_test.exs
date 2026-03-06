@@ -456,8 +456,9 @@ defmodule Mail.Parsers.RFC2822Test do
     assert message.headers["x-received"] ==
              "201.202.203.204 with SMTP id abcdefg.12.123456;        Fri, 01 Apr 2016 11:08:31 -0700 (PDT)"
 
-    assert message.headers["dkim-signature"] ==
+    assert message.headers["dkim-signature"] == [
              "v=1; a=rsa-sha256; c=relaxed/relaxed;        d=example.com; s=20160922;        h=mime-version:in-reply-to:references:date:message-id:subject:from:to;        bh=ABCDEFGHABCDEFGHABCDEFGHABCDEFGHABCDEFGHABC=;        b=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890+/         abcd=="
+           ]
   end
 
   test "parses more than 1 'Received:' header" do
@@ -527,6 +528,79 @@ defmodule Mail.Parsers.RFC2822Test do
     assert message.headers["authentication-results"] == [
              "mx.example.com; spf=pass smtp.mailfrom=sender@example.com"
            ]
+  end
+
+  test "accumulates multiple 'DKIM-Signature' headers into a list" do
+    message =
+      parse_email(~s"""
+      DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=selector1; b=abc123
+      DKIM-Signature: v=1; a=rsa-sha256; d=forwarder.net; s=selector2; b=def456
+      From: sender@example.com
+      To: recipient@example.com
+      Subject: Test
+      Content-Type: text/plain
+
+      Body
+      """)
+
+    assert message.headers["dkim-signature"] == [
+             "v=1; a=rsa-sha256; d=forwarder.net; s=selector2; b=def456",
+             "v=1; a=rsa-sha256; d=example.com; s=selector1; b=abc123"
+           ]
+  end
+
+  test "accumulates ARC headers into lists" do
+    message =
+      parse_email(~s"""
+      ARC-Seal: i=2; cv=pass; a=rsa-sha256; d=relay.example.net; s=arc; b=seal2
+      ARC-Message-Signature: i=2; a=rsa-sha256; d=relay.example.net; s=arc; b=sig2
+      ARC-Authentication-Results: i=2; relay.example.net; dkim=pass
+      ARC-Seal: i=1; cv=none; a=rsa-sha256; d=origin.example.com; s=arc; b=seal1
+      ARC-Message-Signature: i=1; a=rsa-sha256; d=origin.example.com; s=arc; b=sig1
+      ARC-Authentication-Results: i=1; origin.example.com; spf=pass
+      From: sender@example.com
+      To: recipient@example.com
+      Subject: Test
+      Content-Type: text/plain
+
+      Body
+      """)
+
+    assert message.headers["arc-authentication-results"] == [
+             "i=1; origin.example.com; spf=pass",
+             "i=2; relay.example.net; dkim=pass"
+           ]
+
+    assert message.headers["arc-seal"] == [
+             "i=1; cv=none; a=rsa-sha256; d=origin.example.com; s=arc; b=seal1",
+             "i=2; cv=pass; a=rsa-sha256; d=relay.example.net; s=arc; b=seal2"
+           ]
+
+    assert message.headers["arc-message-signature"] == [
+             "i=1; a=rsa-sha256; d=origin.example.com; s=arc; b=sig1",
+             "i=2; a=rsa-sha256; d=relay.example.net; s=arc; b=sig2"
+           ]
+  end
+
+  test "wraps single ARC and DKIM headers in a list" do
+    message =
+      parse_email(~s"""
+      ARC-Authentication-Results: i=1; mx.example.com; spf=pass
+      ARC-Seal: i=1; cv=none; a=rsa-sha256; b=abc
+      ARC-Message-Signature: i=1; a=rsa-sha256; b=def
+      DKIM-Signature: v=1; a=rsa-sha256; d=example.com; b=ghi
+      From: sender@example.com
+      To: recipient@example.com
+      Subject: Test
+      Content-Type: text/plain
+
+      Body
+      """)
+
+    assert message.headers["arc-authentication-results"] == ["i=1; mx.example.com; spf=pass"]
+    assert message.headers["arc-seal"] == ["i=1; cv=none; a=rsa-sha256; b=abc"]
+    assert message.headers["arc-message-signature"] == ["i=1; a=rsa-sha256; b=def"]
+    assert message.headers["dkim-signature"] == ["v=1; a=rsa-sha256; d=example.com; b=ghi"]
   end
 
   test "parses with a '=' in boundary" do

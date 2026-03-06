@@ -412,10 +412,16 @@ defmodule Mail.Parsers.RFC2822 do
   defp is_params([{_key, _value} | params]), do: is_params(params)
   defp is_params([_ | _]), do: false
 
-  defp put_header(headers, "received" = key, value),
-    do: Map.update(headers, key, [value], &[value | &1])
+  @multi_value_headers ~w(
+    received
+    authentication-results
+    arc-authentication-results
+    arc-seal
+    arc-message-signature
+    dkim-signature
+  )
 
-  defp put_header(headers, "authentication-results" = key, value),
+  defp put_header(headers, key, value) when key in @multi_value_headers,
     do: Map.update(headers, key, [value], &[value | &1])
 
   defp put_header(headers, key, value),
